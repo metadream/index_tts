@@ -1,49 +1,70 @@
 import os
-from subprocess import CalledProcessError
-
-os.environ['HF_HUB_CACHE'] = './checkpoints/hf_cache'
-import json
 import re
 import time
+import json
 import librosa
+import random
+import warnings
+import safetensors
 import torch
 import torchaudio
-from torch.nn.utils.rnn import pad_sequence
+import torch.nn.functional as F
 
-import warnings
+from subprocess import CalledProcessError
+from torch.nn.utils.rnn import pad_sequence
+from omegaconf import OmegaConf
+from transformers import AutoTokenizer, SeamlessM4TFeatureExtractor, Wav2Vec2BertModel
+from modelscope import AutoModelForCausalLM
+
+from indextts.gpt.model_v2 import UnifiedVoice
+from indextts.utils.maskgct_utils import build_semantic_codec
+from indextts.utils.checkpoint import load_checkpoint
+from indextts.utils.front import TextNormalizer, TextTokenizer
+from indextts.s2mel.modules.commons import load_checkpoint2, MyModel
+from indextts.s2mel.modules.bigvgan import bigvgan
+from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
+from indextts.s2mel.modules.audio import mel_spectrogram
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from omegaconf import OmegaConf
+current_dir = os.path.dirname(__file__)
+cfg_path = os.path.join(current_dir, "checkpoints/config.yaml")
+model_dir = os.path.abspath(os.path.join(current_dir, "checkpoints"))
 
-from basictts.gpt.model_v2 import UnifiedVoice
-from basictts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
-from basictts.utils.checkpoint import load_checkpoint
-from basictts.utils.front import TextNormalizer, TextTokenizer
+qwen_emo_dir = os.path.join(model_dir, "qwen0.6bemo4-merge/")
+w2v_bert_dir = os.path.join(model_dir, "w2v-bert-2.0/")
+w2v_bert_stats_path = os.path.join(model_dir, "wav2vec2bert_stats.pt")
+semantic_code_path = os.path.join(model_dir, "semantic_codec", "model.safetensors")
+bigvgan_path = os.path.join(model_dir, "bigvgan", "bigvgan_v2_22khz_80band_256x")
+gpt_path = os.path.join(model_dir, "gpt.pth")
+s2mel_path = os.path.join(model_dir, "s2mel.pth")
+bpe_path = os.path.join(model_dir, "bpe.model")
+spk_matrix_path = os.path.join(model_dir, "feat1.pt")
+emo_matrix_path = os.path.join(model_dir, "feat2.pt")
+campplus_ckpt_path = os.path.join(model_dir, "campplus_cn_common.bin")
+glossary_path = os.path.join(model_dir, "glossary.yaml")
 
-from basictts.s2mel.modules.commons import load_checkpoint2, MyModel
-from basictts.s2mel.modules.bigvgan import bigvgan
-from basictts.s2mel.modules.campplus.DTDNN import CAMPPlus
-from basictts.s2mel.modules.audio import mel_spectrogram
 
-from transformers import AutoTokenizer
-from modelscope import AutoModelForCausalLM
-from huggingface_hub import hf_hub_download
-import safetensors
-from transformers import SeamlessM4TFeatureExtractor
-import random
-import torch.nn.functional as F
+def build_semantic_model():
+    semantic_model = Wav2Vec2BertModel.from_pretrained(w2v_bert_dir)
+    semantic_model.eval()
+    stat_mean_var = torch.load(w2v_bert_stats_path)
+    semantic_mean = stat_mean_var["mean"]
+    semantic_std = torch.sqrt(stat_mean_var["var"])
+    return semantic_model, semantic_mean, semantic_std
+
 
 class IndexTTS2:
-    def __init__(
-            self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False
-    ):
+    def __init__(self,
+                 use_fp16=False,
+                 device=None,
+                 use_cuda_kernel=None,
+                 use_deepspeed=False,
+                 use_accel=False,
+                 use_torch_compile=False):
         """
         Args:
-            cfg_path (str): path to the config file.
-            model_dir (str): path to the model directory.
             use_fp16 (bool): whether to use fp16.
             device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
             use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
@@ -74,23 +95,20 @@ class IndexTTS2:
             print(">> Be patient, it may take a while to run in CPU mode.")
 
         self.cfg = OmegaConf.load(cfg_path)
-        self.model_dir = model_dir
         self.dtype = torch.float16 if self.use_fp16 else None
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
 
-        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
-
+        self.qwen_emo = QwenEmotion(qwen_emo_dir)
         self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel)
-        self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
-        load_checkpoint(self.gpt, self.gpt_path)
+        load_checkpoint(self.gpt, gpt_path)
         self.gpt = self.gpt.to(self.device)
         if self.use_fp16:
             self.gpt.eval().half()
         else:
             self.gpt.eval()
-        print(">> GPT weights restored from:", self.gpt_path)
+        print(">> GPT weights restored from:", gpt_path)
 
         if use_deepspeed:
             try:
@@ -104,7 +122,7 @@ class IndexTTS2:
         if self.use_cuda_kernel:
             # preload the CUDA kernel for BigVGAN
             try:
-                from basictts.s2mel.modules.bigvgan.alias_free_activation.cuda import activation1d
+                from indextts.s2mel.modules.bigvgan.alias_free_activation.cuda import activation1d
 
                 print(">> Preload custom CUDA kernel for BigVGAN", activation1d.anti_alias_activation_cuda)
             except Exception as e:
@@ -112,22 +130,19 @@ class IndexTTS2:
                 print(f"{e!r}")
                 self.use_cuda_kernel = False
 
-        self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
-            os.path.join(self.model_dir, self.cfg.w2v_stat))
+        self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained(w2v_bert_dir)
+        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model()
         self.semantic_model = self.semantic_model.to(self.device)
         self.semantic_model.eval()
         self.semantic_mean = self.semantic_mean.to(self.device)
         self.semantic_std = self.semantic_std.to(self.device)
 
         semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
-        semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
-        safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
+        safetensors.torch.load_model(semantic_codec, semantic_code_path)
         self.semantic_codec = semantic_codec.to(self.device)
         self.semantic_codec.eval()
-        print('>> semantic_codec weights restored from: {}'.format(semantic_code_ckpt))
+        print('>> semantic_codec weights restored from: {}'.format(semantic_code_path))
 
-        s2mel_path = os.path.join(self.model_dir, self.cfg.s2mel_checkpoint)
         s2mel = MyModel(self.cfg.s2mel, use_gpt_latent=True)
         s2mel, _, _, _ = load_checkpoint2(
             s2mel,
@@ -150,40 +165,34 @@ class IndexTTS2:
         print(">> s2mel weights restored from:", s2mel_path)
 
         # load campplus_model
-        campplus_ckpt_path = hf_hub_download(
-            "funasr/campplus", filename="campplus_cn_common.bin"
-        )
         campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
         campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
         self.campplus_model = campplus_model.to(self.device)
         self.campplus_model.eval()
         print(">> campplus_model weights restored from:", campplus_ckpt_path)
 
-        bigvgan_name = self.cfg.vocoder.name
-        self.bigvgan = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=self.use_cuda_kernel)
+        self.bigvgan = bigvgan.BigVGAN.from_pretrained(bigvgan_path, use_cuda_kernel=self.use_cuda_kernel)
         self.bigvgan = self.bigvgan.to(self.device)
         self.bigvgan.remove_weight_norm()
         self.bigvgan.eval()
-        print(">> bigvgan weights restored from:", bigvgan_name)
+        print(">> bigvgan weights restored from:", bigvgan_path)
 
-        self.bpe_path = os.path.join(self.model_dir, self.cfg.dataset["bpe_model"])
         self.normalizer = TextNormalizer(enable_glossary=True)
         self.normalizer.load()
         print(">> TextNormalizer loaded")
-        self.tokenizer = TextTokenizer(self.bpe_path, self.normalizer)
-        print(">> bpe model loaded from:", self.bpe_path)
+        self.tokenizer = TextTokenizer(bpe_path, self.normalizer)
+        print(">> bpe model loaded from:", bpe_path)
 
         # 加载术语词汇表（如果存在）
-        self.glossary_path = os.path.join(self.model_dir, "glossary.yaml")
-        if os.path.exists(self.glossary_path):
-            self.normalizer.load_glossary_from_yaml(self.glossary_path)
-            print(">> Glossary loaded from:", self.glossary_path)
+        if os.path.exists(glossary_path):
+            self.normalizer.load_glossary_from_yaml(glossary_path)
+            print(">> Glossary loaded from:", glossary_path)
 
-        emo_matrix = torch.load(os.path.join(self.model_dir, self.cfg.emo_matrix))
+        emo_matrix = torch.load(emo_matrix_path)
         self.emo_matrix = emo_matrix.to(self.device)
         self.emo_num = list(self.cfg.emo_num)
 
-        spk_matrix = torch.load(os.path.join(self.model_dir, self.cfg.spk_matrix))
+        spk_matrix = torch.load(spk_matrix_path)
         self.spk_matrix = spk_matrix.to(self.device)
 
         self.emo_matrix = torch.split(self.emo_matrix, self.emo_num)
@@ -323,11 +332,11 @@ class IndexTTS2:
         if self.gr_progress is not None:
             self.gr_progress(value, desc=desc)
 
-    def _load_and_cut_audio(self,audio_path,max_audio_length_seconds,verbose=False,sr=None):
+    def _load_and_cut_audio(self, audio_path, max_audio_length_seconds, verbose=False, sr=None):
         if not sr:
             audio, sr = librosa.load(audio_path)
         else:
-            audio, _ = librosa.load(audio_path,sr=sr)
+            audio, _ = librosa.load(audio_path, sr=sr)
         audio = torch.tensor(audio).unsqueeze(0)
         max_audio_samples = int(max_audio_length_seconds * sr)
 
@@ -358,7 +367,8 @@ class IndexTTS2:
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None,
               use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, more_segment_before=0, **generation_kwargs):
+              verbose=False, max_text_tokens_per_segment=120, stream_return=False, more_segment_before=0,
+              **generation_kwargs):
         if stream_return:
             return self.infer_generator(
                 spk_audio_prompt, text, output_path,
@@ -380,10 +390,11 @@ class IndexTTS2:
                 return None
 
     def infer_generator(self, spk_audio_prompt, text, output_path,
-              emo_audio_prompt=None, emo_alpha=1.0,
-              emo_vector=None,
-              use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
-              verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0, **generation_kwargs):
+                        emo_audio_prompt=None, emo_alpha=1.0,
+                        emo_vector=None,
+                        use_emo_text=False, emo_text=None, use_random=False, interval_silence=200,
+                        verbose=False, max_text_tokens_per_segment=120, stream_return=False, quick_streaming_tokens=0,
+                        **generation_kwargs):
         print(">> starting inference...")
         self._set_gr_progress(0, "starting inference...")
         if verbose:
@@ -432,7 +443,7 @@ class IndexTTS2:
                 self.cache_s2mel_prompt = None
                 self.cache_mel = None
                 torch.cuda.empty_cache()
-            audio,sr = self._load_and_cut_audio(spk_audio_prompt,15,verbose)
+            audio, sr = self._load_and_cut_audio(spk_audio_prompt, 15, verbose)
             audio_22k = torchaudio.transforms.Resample(sr, 22050)(audio)
             audio_16k = torchaudio.transforms.Resample(sr, 16000)(audio)
 
@@ -486,7 +497,7 @@ class IndexTTS2:
             if self.cache_emo_cond is not None:
                 self.cache_emo_cond = None
                 torch.cuda.empty_cache()
-            emo_audio, _ = self._load_and_cut_audio(emo_audio_prompt,15,verbose,sr=16000)
+            emo_audio, _ = self._load_and_cut_audio(emo_audio_prompt, 15, verbose, sr=16000)
             emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
             emo_input_features = emo_inputs["input_features"]
             emo_attention_mask = emo_inputs["attention_mask"]
@@ -501,13 +512,16 @@ class IndexTTS2:
 
         self._set_gr_progress(0.1, "text processing...")
         text_tokens_list = self.tokenizer.tokenize(text)
-        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment, quick_streaming_tokens = quick_streaming_tokens)
+        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment,
+                                                 quick_streaming_tokens=quick_streaming_tokens)
         segments_count = len(segments)
 
         text_token_ids = self.tokenizer.convert_tokens_to_ids(text_tokens_list)
         if self.tokenizer.unk_token_id in text_token_ids:
-            print(f"  >> Warning: input text contains {text_token_ids.count(self.tokenizer.unk_token_id)} unknown tokens (id={self.tokenizer.unk_token_id}):")
-            print( "     Tokens which can't be encoded: ", [t for t, id in zip(text_tokens_list, text_token_ids) if id == self.tokenizer.unk_token_id])
+            print(
+                f"  >> Warning: input text contains {text_token_ids.count(self.tokenizer.unk_token_id)} unknown tokens (id={self.tokenizer.unk_token_id}):")
+            print("     Tokens which can't be encoded: ",
+                  [t for t, id in zip(text_tokens_list, text_token_ids) if id == self.tokenizer.unk_token_id])
             print(f"     Consider updating the BPE model or modifying the text to avoid unknown tokens.")
 
         if verbose:
@@ -532,7 +546,7 @@ class IndexTTS2:
         s2mel_time = 0
         bigvgan_time = 0
         has_warned = False
-        silence = None # for stream_return
+        silence = None  # for stream_return
         for seg_idx, sent in enumerate(segments):
             self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
                                   f"speech synthesis {seg_idx + 1}/{segments_count}...")
@@ -669,7 +683,8 @@ class IndexTTS2:
                 if stream_return:
                     yield wav.cpu()
                     if silence == None:
-                        silence = self.interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
+                        silence = self.interval_silence(wavs, sampling_rate=sampling_rate,
+                                                        interval_silence=interval_silence)
                     yield silence
         end_time = time.perf_counter()
 
@@ -715,6 +730,7 @@ def find_most_similar_cosine(query_vector, matrix):
     similarities = F.cosine_similarity(query_vector, matrix, dim=1)
     most_similar_index = torch.argmax(similarities)
     return most_similar_index
+
 
 class QwenEmotion:
     def __init__(self, model_dir):
@@ -828,24 +844,3 @@ class QwenEmotion:
             # print(">>  after vec swap", content)
 
         return self.convert(content)
-
-
-if __name__ == "__main__":
-    prompt_wav = "examples/voice_01.wav"
-    text = '欢迎大家来体验indextts2，并给予我们意见与反馈，谢谢大家。'
-    tts = IndexTTS2(
-        cfg_path="checkpoints/config.yaml",
-        model_dir="checkpoints",
-        use_cuda_kernel=False,
-        use_torch_compile=True
-    )
-    tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
-    char_size = 5
-    import string
-    time_buckets = []
-    for i in range(10):
-        text = ''.join(random.choices(string.ascii_letters, k=char_size))
-        start_time = time.time()
-        tts.infer(spk_audio_prompt=prompt_wav, text=text, output_path="gen.wav", verbose=True)
-        time_buckets.append(time.time() - start_time)
-    print(time_buckets)
