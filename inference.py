@@ -25,12 +25,16 @@ from indextts.s2mel.modules.bigvgan import bigvgan
 from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
 from indextts.s2mel.modules.audio import mel_spectrogram
 
+# =========================================================
+# This file is refactored from the official repository's infer_v2.py.
+# =========================================================
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 current_dir = os.path.dirname(__file__)
 cfg_path = os.path.join(current_dir, "checkpoints/config.yaml")
-model_dir = os.path.abspath(os.path.join(current_dir, "checkpoints"))
+model_dir = os.path.join(current_dir, "checkpoints")
 
 qwen_emo_dir = os.path.join(model_dir, "qwen0.6bemo4-merge/")
 w2v_bert_dir = os.path.join(model_dir, "w2v-bert-2.0/")
