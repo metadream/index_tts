@@ -17,15 +17,15 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from omegaconf import OmegaConf
 
-from indextts.gpt.model_v2 import UnifiedVoice
-from indextts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
-from indextts.utils.checkpoint import load_checkpoint
-from indextts.utils.front import TextNormalizer, TextTokenizer
+from basictts.gpt.model_v2 import UnifiedVoice
+from basictts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
+from basictts.utils.checkpoint import load_checkpoint
+from basictts.utils.front import TextNormalizer, TextTokenizer
 
-from indextts.s2mel.modules.commons import load_checkpoint2, MyModel
-from indextts.s2mel.modules.bigvgan import bigvgan
-from indextts.s2mel.modules.campplus.DTDNN import CAMPPlus
-from indextts.s2mel.modules.audio import mel_spectrogram
+from basictts.s2mel.modules.commons import load_checkpoint2, MyModel
+from basictts.s2mel.modules.bigvgan import bigvgan
+from basictts.s2mel.modules.campplus.DTDNN import CAMPPlus
+from basictts.s2mel.modules.audio import mel_spectrogram
 
 from transformers import AutoTokenizer
 from modelscope import AutoModelForCausalLM
@@ -104,7 +104,7 @@ class IndexTTS2:
         if self.use_cuda_kernel:
             # preload the CUDA kernel for BigVGAN
             try:
-                from indextts.s2mel.modules.bigvgan.alias_free_activation.cuda import activation1d
+                from basictts.s2mel.modules.bigvgan.alias_free_activation.cuda import activation1d
 
                 print(">> Preload custom CUDA kernel for BigVGAN", activation1d.anti_alias_activation_cuda)
             except Exception as e:
@@ -139,13 +139,13 @@ class IndexTTS2:
         )
         self.s2mel = s2mel.to(self.device)
         self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
-        
+
         # Enable torch.compile optimization if requested
         if self.use_torch_compile:
             print(">> Enabling torch.compile optimization")
             self.s2mel.enable_torch_compile()
             print(">> torch.compile optimization enabled successfully")
-        
+
         self.s2mel.eval()
         print(">> s2mel weights restored from:", s2mel_path)
 
@@ -336,7 +336,7 @@ class IndexTTS2:
                 print(f"Audio too long ({audio.shape[1]} samples), truncating to {max_audio_samples} samples")
             audio = audio[:, :max_audio_samples]
         return audio, sr
-    
+
     def normalize_emo_vec(self, emo_vector, apply_bias=True):
         # apply biased emotion factors for better user experience,
         # by de-emphasizing emotions that can cause strange results
@@ -509,7 +509,7 @@ class IndexTTS2:
             print(f"  >> Warning: input text contains {text_token_ids.count(self.tokenizer.unk_token_id)} unknown tokens (id={self.tokenizer.unk_token_id}):")
             print( "     Tokens which can't be encoded: ", [t for t, id in zip(text_tokens_list, text_token_ids) if id == self.tokenizer.unk_token_id])
             print(f"     Consider updating the BPE model or modifying the text to avoid unknown tokens.")
-                  
+
         if verbose:
             print("text_tokens_list:", text_tokens_list)
             print("segments count:", segments_count)
@@ -834,8 +834,8 @@ if __name__ == "__main__":
     prompt_wav = "examples/voice_01.wav"
     text = '欢迎大家来体验indextts2，并给予我们意见与反馈，谢谢大家。'
     tts = IndexTTS2(
-        cfg_path="checkpoints/config.yaml", 
-        model_dir="checkpoints", 
+        cfg_path="checkpoints/config.yaml",
+        model_dir="checkpoints",
         use_cuda_kernel=False,
         use_torch_compile=True
     )
