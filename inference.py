@@ -1,5 +1,6 @@
+import io
 import torch
-
+import torchaudio
 from IndexTTS2 import IndexTTS2
 
 
@@ -20,6 +21,20 @@ def infer(audio_prompt1, text, audio_prompt2=None):
 
     merged_wav = torch.cat(segment_wavs, dim=-1)
     return merged_wav, sampling_rate
+
+
+def wav_to_bytes(wav_tensor: torch.Tensor, sampling_rate: int) -> io.BytesIO:
+    """
+    将 torch.Tensor wav 转成 BytesIO WAV 流
+    """
+    buf = io.BytesIO()
+    torchaudio.save(buf, wav_tensor, sampling_rate, format="wav")
+    buf.seek(0)
+    return buf
+
+
+def wav_to_file(output_path, wav_tensor: torch.Tensor, sampling_rate: int, ):
+    torchaudio.save(output_path, wav_tensor, sampling_rate)
 
 
 def split_text_by_speaker(text, audio_1, audio_2):
