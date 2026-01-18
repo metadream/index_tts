@@ -56,5 +56,6 @@ def wav_to_bytes(wav_tensor: torch.Tensor, sampling_rate: int) -> io.BytesIO:
 
 
 # 将 torch.Tensor wav 保存到文件
-def wav_to_file(output_path, wav_tensor: torch.Tensor, sampling_rate: int, ):
+def wav_to_file(output_path: str, wav_tensor: torch.Tensor, sampling_rate: int) -> str:
     torchaudio.save(output_path, wav_tensor, sampling_rate)
+    return output_path
