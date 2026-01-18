@@ -348,7 +348,7 @@ class IndexTTS2:
         return emo_vector
 
     # 原始推理模式
-    def infer(self, spk_audio_prompt, text,
+    def infer(self, text, spk_audio_prompt,
               emo_audio_prompt=None, emo_alpha=1.0,
               emo_vector=None, use_emo_text=False,
               emo_text=None, use_random=False, interval_silence=200,
