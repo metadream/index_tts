@@ -32,6 +32,7 @@ from indextts.s2mel.modules.audio import mel_spectrogram
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# Set the path of all models
 current_dir = os.path.dirname(__file__)
 cfg_path = os.path.join(current_dir, "checkpoints/config.yaml")
 model_dir = os.path.join(current_dir, "checkpoints")
@@ -50,19 +51,23 @@ campplus_ckpt_path = os.path.join(model_dir, "campplus_cn_common.bin")
 glossary_path = os.path.join(model_dir, "glossary.yaml")
 
 
+# =========================================================
+# IndexTTS2 Class
+# =========================================================
+
 class IndexTTS2:
     def __init__(self,
-                 use_fp16=False,
                  device=None,
                  use_cuda_kernel=None,
+                 use_fp16=False,
                  use_deepspeed=False,
                  use_accel=False,
                  use_torch_compile=False):
         """
         Args:
-            use_fp16 (bool): whether to use fp16.
             device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
             use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
+            use_fp16 (bool): whether to use fp16.
             use_deepspeed (bool): whether to use DeepSpeed or not.
             use_accel (bool): whether to use acceleration engine for GPT2 or not.
             use_torch_compile (bool): whether to use torch.compile for optimization or not.
@@ -188,7 +193,6 @@ class IndexTTS2:
 
         spk_matrix = torch.load(spk_matrix_path)
         self.spk_matrix = spk_matrix.to(self.device)
-
         self.emo_matrix = torch.split(self.emo_matrix, self.emo_num)
         self.spk_matrix = torch.split(self.spk_matrix, self.emo_num)
 
@@ -212,10 +216,6 @@ class IndexTTS2:
         self.cache_emo_cond = None
         self.cache_emo_audio_prompt = None
         self.cache_mel = None
-
-        # 进度引用显示（可选）
-        self.gr_progress = None
-        self.model_version = self.cfg.version if hasattr(self.cfg, "version") else None
 
     @torch.no_grad()
     def get_emb(self, input_features, attention_mask):
@@ -345,7 +345,6 @@ class IndexTTS2:
         if emo_sum > 0.8:
             scale_factor = 0.8 / emo_sum
             emo_vector = [vec * scale_factor for vec in emo_vector]
-
         return emo_vector
 
     # 原始推理模式
@@ -470,13 +469,13 @@ class IndexTTS2:
             emo_cond_emb = self.cache_emo_cond
 
         text_tokens_list = self.tokenizer.tokenize(text)
-        sentences = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
+        segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
 
         if verbose:
             print("text_tokens_list:", text_tokens_list)
-            print("sentences count:", len(sentences))
+            print("segments count:", len(segments))
             print("max_text_tokens_per_segment:", max_text_tokens_per_segment)
-            print(*sentences, sep="\n")
+            print(*segments, sep="\n")
 
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
@@ -496,7 +495,7 @@ class IndexTTS2:
         bigvgan_time = 0
         has_warned = False
 
-        for sent in sentences:
+        for sent in segments:
             text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
             text_tokens = torch.tensor(text_tokens, dtype=torch.int32, device=self.device).unsqueeze(0)
             if verbose:
@@ -632,8 +631,7 @@ class IndexTTS2:
         print(f">> Generated audio length: {wav_length:.2f} seconds")
         print(f">> RTF: {(end_time - start_time) / wav_length:.4f}")
 
-        # 官方代码返回 int16 类型可直接保存或播放
-        # 此处为了后续拼接处理改为 float32 (不可直接播放)
+        # 官方代码返回 int16 类型，此处为了后续拼接处理改为 float32
         wav = wav / 32768.0
         wav = wav.cpu().float()
         return wav, sampling_rate
@@ -717,7 +715,6 @@ class QwenEmotion:
         return emotion_dict
 
     def inference(self, text_input):
-        start = time.time()
         messages = [
             {"role": "system", "content": f"{self.prompt}"},
             {"role": "user", "content": f"{text_input}"}
