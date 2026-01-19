@@ -3,7 +3,7 @@ import os
 
 import torch
 import torchaudio
-from IndexTTS2 import IndexTTS2
+from index_tts2 import IndexTTS2
 
 
 # =========================================================
