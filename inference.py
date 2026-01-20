@@ -5,28 +5,27 @@ import torch
 import torchaudio
 from index_tts2 import IndexTTS2
 
+tts2 = None
+
 
 # =========================================================
 # IndexTTS2 接口适配与扩展：支持双人语音对话模式
 # =========================================================
 
-def infer(text_prompt, audio_prompt1, audio_prompt2=None, verbose=False):
-    tts2 = IndexTTS2()
+def infer(text_prompt, audio_prompt1, audio_prompt2=None):
+    global tts2
+    tts2 = tts2 or IndexTTS2()
 
     # 如果只输入一个音频提示，直接返回推理结果
     if audio_prompt2 is None:
-        return tts2.infer(
-            text=text_prompt,
-            spk_audio_prompt=audio_prompt1,
-            verbose=verbose
-        )
+        return tts2.infer(text_prompt, audio_prompt1)
 
     # 如果输入两个音频提示，则分角色处理每段文本和对应音频
     segments = split_text_by_speaker(text_prompt, audio_prompt1, audio_prompt2)
     segment_wavs = []
 
     for text, audio, _ in segments:
-        wav, sampling_rate = tts2.infer(text, audio, verbose=verbose)
+        wav, sampling_rate = tts2.infer(text, audio)
         segment_wavs.append(wav)
     # 拼接音频片段
     merged_wav = torch.cat(segment_wavs, dim=-1)
@@ -61,4 +60,3 @@ def wav_to_bytes(wav_tensor: torch.Tensor, sampling_rate: int) -> io.BytesIO:
 def wav_to_file(output_path: str, wav_tensor: torch.Tensor, sampling_rate: int) -> str:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     torchaudio.save(output_path, wav_tensor, sampling_rate)
-    return output_path
