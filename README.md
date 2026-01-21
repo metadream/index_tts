@@ -28,8 +28,14 @@ pip3 install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
 如果在GPU CUDA环境下运行，还可以安装Deepspeed和CUDA版本的Torch加速推理过程。
 ```bash
+# 先安装 Cuda Toolkit 12.8
+wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb
+dpkg -i cuda-keyring_1.1-1_all.deb
+apt update
+apt install -y cuda-toolkit-12-8
+
+# 安装deepspeed之前必须先安装cuda环境
 pip install deepspeed==0.17.1
-pip install torch==2.8.0+cu128 torchaudio==2.8.0+cu128 torchvision==0.23.0+cu128 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ## 下载模型
