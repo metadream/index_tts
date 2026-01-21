@@ -25,7 +25,12 @@ source .venv/bin/activate
 pip3 install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 # pip3 install -r requirements.txt
 ```
-如果在GPU环境下运行，还可以安装deepspeed和cuda加速推理。
+
+如果在GPU CUDA环境下运行，还可以安装Deepspeed和CUDA版本的Torch加速推理过程。
+```bash
+pip install deepspeed==0.17.1
+pip install torch==2.8.0+cu128 torchaudio==2.8.0+cu128 torchvision==0.23.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+```
 
 ## 下载模型
 
