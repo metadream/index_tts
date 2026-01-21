@@ -67,12 +67,12 @@ class IndexTTS2:
                  use_torch_compile=False):
         """
         Args:
-            device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
-            use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
-            use_fp16 (bool): whether to use fp16.
-            use_deepspeed (bool): whether to use DeepSpeed or not.
-            use_accel (bool): whether to use acceleration engine for GPT2 or not.
-            use_torch_compile (bool): whether to use torch.compile for optimization or not.
+            device (str): 使用设备 (如 cuda:0, cpu). 默认自动设置为 CUDA 或 MPS。
+            use_cuda_kernel (None | bool): 是否使用 BigVGan 激活 CUDA 内核编译加速推理 (仅支持 CUDA 显卡)。
+            use_fp16 (bool): 是否使用半精度浮点：float16 可显著降低显存提升速度，但语音质量或略有下降。在 MPS 上效果不如 float32。
+            use_deepspeed (bool): 是否使用 DeepSpeed 加速推理。
+            use_accel (bool): 是否为 GPT2 使用加速引擎。
+            use_torch_compile (bool): 是否使用 torch 编译进行优化。
         """
         if device is not None:
             self.device = device
