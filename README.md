@@ -26,7 +26,7 @@ pip3 install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 # pip3 install -r requirements.txt
 ```
 
-如果在GPU环境下运行，还可以安装deepspeed和cuda加速模块：
+如果在GPU环境下运行，还可以安装deepspeed和cuda版本的torch模块：
 ```bash
 pip install deepspeed==0.17.1
 pip install torch==2.8.* torchaudio==2.8.* torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
