@@ -473,9 +473,6 @@ class IndexTTS2:
 
         text_tokens_list = self.tokenizer.tokenize(text)
         segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment)
-        logger.info("text_tokens_list: %s", text_tokens_list)
-        logger.info("segments count: %s", len(segments))
-        logger.info("max_text_tokens_per_segment: %s", max_text_tokens_per_segment)
         logger.info(segments)
 
         do_sample = generation_kwargs.pop("do_sample", True)
